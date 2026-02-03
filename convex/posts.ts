@@ -9,6 +9,32 @@ function generateSlug(title: string): string {
     .slice(0, 100);
 }
 
+// Helper: Generate unique slug (handles collisions by appending number)
+async function generateUniqueSlug(
+  ctx: { db: any },
+  baseSlug: string,
+  excludeId?: string
+): Promise<string> {
+  let slug = baseSlug;
+  let counter = 1;
+
+  while (true) {
+    const existing = await ctx.db
+      .query("posts")
+      .withIndex("by_slug", (q: any) => q.eq("slug", slug))
+      .first();
+
+    // No collision, or collision is with the same post (during update)
+    if (!existing || (excludeId && existing._id === excludeId)) {
+      return slug;
+    }
+
+    // Collision found, try next number
+    counter++;
+    slug = `${baseSlug}-${counter}`;
+  }
+}
+
 // Query: Get all posts (admin view)
 export const list = query({
   handler: async (ctx) => {
@@ -62,7 +88,9 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
-    const slug = generateSlug(args.title);
+    const baseSlug = generateSlug(args.title);
+    // Handle slug collision by auto-appending number
+    const slug = await generateUniqueSlug(ctx, baseSlug);
     const excerpt = args.content.slice(0, 150).trim() + "...";
 
     return await ctx.db.insert("posts", {
@@ -98,7 +126,9 @@ export const update = mutation({
     }
 
     if (updates.title && existing.status === "draft") {
-      patch.slug = generateSlug(updates.title);
+      const baseSlug = generateSlug(updates.title);
+      // Handle slug collision, excluding current post
+      patch.slug = await generateUniqueSlug(ctx, baseSlug, id);
     }
 
     if (updates.status === "published" && existing.status !== "published") {
